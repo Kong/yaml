@@ -25,6 +25,7 @@ package yaml
 import (
 	"bytes"
 	"fmt"
+	"unicode/utf8"
 )
 
 // Flush the buffer if needed.
@@ -162,10 +163,9 @@ func yaml_emitter_emit(emitter *yaml_emitter_t, event *yaml_event_t) bool {
 // Check if we need to accumulate more events before emitting.
 //
 // We accumulate extra
-//  - 1 event for DOCUMENT-START
-//  - 2 events for SEQUENCE-START
-//  - 3 events for MAPPING-START
-//
+//   - 1 event for DOCUMENT-START
+//   - 2 events for SEQUENCE-START
+//   - 3 events for MAPPING-START
 func yaml_emitter_need_more_events(emitter *yaml_emitter_t) bool {
 	if emitter.events_head == len(emitter.events) {
 		return true
@@ -241,7 +241,7 @@ func yaml_emitter_increase_indent(emitter *yaml_emitter_t, flow, indentless bool
 			emitter.indent += 2
 		} else {
 			// Everything else aligns to the chosen indentation.
-			emitter.indent = emitter.best_indent*((emitter.indent+emitter.best_indent)/emitter.best_indent)
+			emitter.indent = emitter.best_indent * ((emitter.indent + emitter.best_indent) / emitter.best_indent)
 		}
 	}
 	return true
@@ -968,15 +968,18 @@ func yaml_emitter_check_empty_mapping(emitter *yaml_emitter_t) bool {
 
 // Check if the next node can be expressed as a simple key.
 func yaml_emitter_check_simple_key(emitter *yaml_emitter_t) bool {
-	length := 0
+	// first check length in bytes, since the fast majority of strings are
+	// within 1024 bytes, so take the faster route first. Only if we must,
+	// we check the length in runes and take the expensive route.
+	bLength := 0
 	switch emitter.events[emitter.events_head].typ {
 	case yaml_ALIAS_EVENT:
-		length += len(emitter.anchor_data.anchor)
+		bLength += len(emitter.anchor_data.anchor)
 	case yaml_SCALAR_EVENT:
 		if emitter.scalar_data.multiline {
 			return false
 		}
-		length += len(emitter.anchor_data.anchor) +
+		bLength += len(emitter.anchor_data.anchor) +
 			len(emitter.tag_data.handle) +
 			len(emitter.tag_data.suffix) +
 			len(emitter.scalar_data.value)
@@ -984,20 +987,51 @@ func yaml_emitter_check_simple_key(emitter *yaml_emitter_t) bool {
 		if !yaml_emitter_check_empty_sequence(emitter) {
 			return false
 		}
-		length += len(emitter.anchor_data.anchor) +
+		bLength += len(emitter.anchor_data.anchor) +
 			len(emitter.tag_data.handle) +
 			len(emitter.tag_data.suffix)
 	case yaml_MAPPING_START_EVENT:
 		if !yaml_emitter_check_empty_mapping(emitter) {
 			return false
 		}
-		length += len(emitter.anchor_data.anchor) +
+		bLength += len(emitter.anchor_data.anchor) +
 			len(emitter.tag_data.handle) +
 			len(emitter.tag_data.suffix)
 	default:
 		return false
 	}
-	return length <= 128
+
+	// length represents bytes, not runes.
+	if bLength <= 1024 {
+		// 1024 or less bytes are also 1024 or less runes.
+		// fast majority of cases are handled here.
+		return true
+	}
+	if bLength > 4096 {
+		// 4096 or more bytes are always 1024 or more runes.
+		return false
+	}
+
+	// we must convert and count runes, which is more expensive but less common.
+	rLength := 0
+	switch emitter.events[emitter.events_head].typ {
+	case yaml_ALIAS_EVENT:
+		rLength += utf8.RuneCount(emitter.anchor_data.anchor)
+	case yaml_SCALAR_EVENT:
+		rLength += utf8.RuneCount(emitter.anchor_data.anchor) +
+			utf8.RuneCount(emitter.tag_data.handle) +
+			utf8.RuneCount(emitter.tag_data.suffix) +
+			utf8.RuneCount(emitter.scalar_data.value)
+	case yaml_SEQUENCE_START_EVENT:
+		rLength += utf8.RuneCount(emitter.anchor_data.anchor) +
+			utf8.RuneCount(emitter.tag_data.handle) +
+			utf8.RuneCount(emitter.tag_data.suffix)
+	case yaml_MAPPING_START_EVENT:
+		rLength += utf8.RuneCount(emitter.anchor_data.anchor) +
+			utf8.RuneCount(emitter.tag_data.handle) +
+			utf8.RuneCount(emitter.tag_data.suffix)
+	}
+	return rLength <= 1024
 }
 
 // Determine an acceptable scalar style.

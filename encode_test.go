@@ -349,6 +349,16 @@ var marshalTests = []struct {
 		"a: \"1:1\"\n",
 	},
 
+	// Issue 849: simple key is <= 1024 runes, not <= 1024 bytes
+	{
+		map[string]string{strings.Repeat("a", 1024): "a"},
+		strings.Repeat("a", 1024) + ": a" + "\n",
+	},
+	{
+		map[string]string{strings.Repeat("你", 1024): "a"},
+		strings.Repeat("你", 1024) + ": a" + "\n",
+	},
+
 	// Binary data.
 	{
 		map[string]string{"a": "\x00"},
